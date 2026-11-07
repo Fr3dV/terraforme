@@ -194,11 +194,13 @@ button:focus-visible,.slot:focus-visible{outline:3px solid var(--pres);outline-o
       <dt>Météo</dt><dd>Pluie, orages et tempêtes de sable arrivent quand l'atmosphère s'épaissit. Sous la pluie, ta réserve d'eau se remplit.</dd>
       <dt>Survie</dt><dd>La capsule, les habitats et les générateurs d'O₂ rechargent ton oxygène ; les habitats donnent aussi de l'eau.</dd>
     </dl>
+    <div id="gzScores"></div>
     <div class="row"><button id="play" type="button">Jouer</button><button id="reset" type="button">Recommencer à zéro</button></div>
   </div>
 </div>
 
 <script src="vendor/three.min.js"></script>
+<script src="https://gamzu.fr/scores.js" defer></script>
 <script>
 window.addEventListener("error",e=>{if(!e||!e.message||/Script error|ResizeObserver/i.test(e.message)||(e.filename&&e.filename!==location.href&&!/three/.test(e.filename)))return;const m=document.getElementById("menuTxt");if(m){m.textContent="Erreur technique : "+(e.message||"inconnue")+" (ligne "+(e.lineno||"?")+"). Recharge la page ; si ça persiste, envoie-moi ce message.";m.style.color="#F07A6A";document.getElementById("menu").style.display="grid"}});
 (function(){
@@ -622,7 +624,7 @@ SLOTS.forEach((s,i)=>{const b=document.createElement("button");b.type="button";b
 function select(i){sel=Math.max(0,Math.min(SLOTS.length-1,i));ghostRebuild();updateHUD()}
 addEventListener("wheel",e=>{if(!playing)return;select(sel+(e.deltaY>0?1:-1))},{passive:true});
 
-function openMenu(txt){playing=false;$("menu").style.display="grid";if(txt)$("menuTxt").textContent=txt;$("play").textContent="Reprendre";save()}
+function openMenu(txt){playing=false;$("menu").style.display="grid";if(txt)$("menuTxt").textContent=txt;$("play").textContent="Reprendre";save();gzMenu()}
 function start(){$("menu").style.display="none";playing=true;auInit();if(AU.ctx&&AU.ctx.resume)AU.ctx.resume();
   if(!COARSE){try{const r=canvas.requestPointerLock&&canvas.requestPointerLock();if(r&&r.catch)r.catch(()=>{})}catch(e){}
     setTimeout(()=>{if(!locked&&playing)toast("Pour regarder autour : maintiens le clic et glisse la souris.")},700)}}
@@ -761,7 +763,7 @@ function layoutLeft(){const tl=$("tl"),ob=$("obj"),sv=$("surv");if(!tl)return;co
   pr.style.display="";place();if(sv.getBoundingClientRect().bottom>innerHeight-110){pr.style.display="none";place()}}
 function updateHUD(){
   const R=rates(),t=ti(),si=stageIdx();
-  if(si>S.stage){for(let i=S.stage+1;i<=si;i++)toast("Nouvelle étape : "+STAGES[i][1]+". "+STAGES[i][2],"good");S.stage=si;
+  if(si>S.stage){for(let i=S.stage+1;i<=si;i++)toast("Nouvelle étape : "+STAGES[i][1]+". "+STAGES[i][2],"good");S.stage=si;gzEnvoi();
     if(si===STAGES.length-1&&!S.won){S.won=true;toast("L'air est respirable : ton oxygène ne baisse plus.","good")}}
   $("stName").textContent=STAGES[si][1];$("stDesc").textContent=STAGES[si][2];
   $("ti").textContent=fmt(t);const tr=R.r.heat+R.r.pres+R.r.oxy+R.r.bio;$("tiRate").textContent=tr?"+"+fmt(tr)+"/s":"";
@@ -786,6 +788,10 @@ function updSurv(){
   $("gO2").style.width=S.o2+"%";$("vO2").textContent=Math.ceil(S.o2);$("gW").style.width=S.water+"%";$("vW").textContent=Math.ceil(S.water);
   $("vO2").classList.toggle("crit",S.o2<25);$("vW").classList.toggle("crit",S.water<20);
   $("vig").style.opacity=S.o2<25?(1-S.o2/25).toFixed(2):0}
+/* classement gamzu.fr : indice de terraformation, envoyé à chaque nouvelle étape et toutes les 5 min de jeu ; top 10 dans le menu */
+function gzEnvoi(){if(window.Gamzu&&Gamzu.nom()&&ti()>=1)Gamzu.envoyer("tf",Math.floor(ti()),null,STAGES[stageIdx()][1]).catch(()=>{})}
+function gzMenu(){if(window.Gamzu)Gamzu.panneau($("gzScores"),"tf",Math.floor(ti()),STAGES[stageIdx()][1])}
+setInterval(()=>{if(playing)gzEnvoi()},300000);addEventListener("load",gzMenu);
 function save(){if(resetting)return;S.t=Date.now();S.pos=[P.x,P.z,P.yaw];try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}}
 (function(){const away=Math.min(7200,(Date.now()-(S.t||Date.now()))/1000);
   if(away>30){const b=ti();stepEco(away);const g=ti()-b;if(g>0)setTimeout(()=>toast("Pendant ton absence : +"+fmt(g)+" d'indice de terraformation."),700)}})();

@@ -30,5 +30,6 @@ Lance un serveur statique dans ce dossier (`python3 -m http.server 8000`), puis 
 ## Notes
 
 - La sauvegarde est stockée dans le navigateur du joueur (localStorage, clé `terraforme-v3`) : elle ne suit pas d'un appareil à l'autre.
+- Classement : l'indice de terraformation est envoyé au classement partagé de gamzu.fr (script `https://gamzu.fr/scores.js`) à chaque nouvelle étape et toutes les 5 minutes de jeu, si le joueur a choisi un pseudo. Le top 10 s'affiche dans le menu. Sans connexion, le jeu fonctionne normalement.
 - Sur un vrai domaine, la capture de la souris fonctionne normalement : clic sur Jouer, Échap pour la pause.
 - Licence de three.js : `vendor/THREE-LICENSE.txt` (MIT).
