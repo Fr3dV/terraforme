@@ -107,6 +107,7 @@ body{background:var(--page);color:var(--text);font:14px/1.45 "IBM Plex Sans",sys
 #pauseBtn{position:fixed;z-index:3;top:calc(56px + env(safe-area-inset-top,0px));left:50%;transform:translateX(-50%);padding:5px 14px;border-radius:14px;border:1px solid var(--hud-line);background:var(--hud);color:var(--text);font:500 12.5px "IBM Plex Sans",sans-serif;cursor:pointer}
 @media (pointer:coarse){#pauseBtn{top:calc(10px + env(safe-area-inset-top,0px))}}
 #touch{display:none}
+body.gamzu-manette #touch{display:none!important}
 @media (pointer:coarse){
   #touch{display:block}
   #tl{width:190px;font-size:12px}#tl h1{font-size:17px}#tl .params{display:none}
@@ -195,12 +196,13 @@ button:focus-visible,.slot:focus-visible{outline:3px solid var(--pres);outline-o
       <dt>Survie</dt><dd>La capsule, les habitats et les générateurs d'O₂ rechargent ton oxygène ; les habitats donnent aussi de l'eau.</dd>
     </dl>
     <div id="gzScores"></div>
-    <div class="row"><button id="play" type="button">Jouer</button><button id="reset" type="button">Recommencer à zéro</button></div>
+    <div class="row"><button id="play" type="button" data-pad="defaut">Jouer</button><button id="reset" type="button">Recommencer à zéro</button></div>
   </div>
 </div>
 
 <script src="vendor/three.min.js"></script>
 <script src="https://gamzu.fr/scores.js" defer></script>
+<script src="https://gamzu.fr/gamzu-pad.js"></script>
 <script>
 window.addEventListener("error",e=>{if(!e||!e.message||/Script error|ResizeObserver/i.test(e.message)||(e.filename&&e.filename!==location.href&&!/three/.test(e.filename)))return;const m=document.getElementById("menuTxt");if(m){m.textContent="Erreur technique : "+(e.message||"inconnue")+" (ligne "+(e.lineno||"?")+"). Recharge la page ; si ça persiste, envoie-moi ce message.";m.style.color="#F07A6A";document.getElementById("menu").style.display="grid"}});
 (function(){
@@ -627,7 +629,7 @@ addEventListener("wheel",e=>{if(!playing)return;select(sel+(e.deltaY>0?1:-1))},{
 function openMenu(txt){playing=false;$("menu").style.display="grid";if(txt)$("menuTxt").textContent=txt;$("play").textContent="Reprendre";save();gzMenu()}
 function start(){$("menu").style.display="none";playing=true;auInit();if(AU.ctx&&AU.ctx.resume)AU.ctx.resume();
   if(!COARSE){try{const r=canvas.requestPointerLock&&canvas.requestPointerLock();if(r&&r.catch)r.catch(()=>{})}catch(e){}
-    setTimeout(()=>{if(!locked&&playing)toast("Pour regarder autour : maintiens le clic et glisse la souris.")},700)}}
+    setTimeout(()=>{if(!locked&&playing&&!padOn)toast("Pour regarder autour : maintiens le clic et glisse la souris.")},700)}}
 $("play").addEventListener("click",start);
 let armT=null;
 $("reset").addEventListener("click",()=>{const b=$("reset");
@@ -810,7 +812,7 @@ function survive(dt){
   if(S.water<15&&!wZone&&now-warned>9000){warned=now;toast("Tu as soif : rejoins un habitat ou bois au lac.","bad")}
   if(S.o2<=0||S.water<=0)faint(S.o2<=0?"Tu as manqué d'oxygène.":"Tu t'es évanoui de soif.");
 }
-function faint(why){dead=true;if(P.driving){P.driving.userData.rec.x=P.driving.position.x;P.driving.userData.rec.z=P.driving.position.z;P.driving=null;P.rv=0}$("fade").style.opacity=1;
+function faint(why){dead=true;if(PAD)PAD.vibrer(600,1);if(P.driving){P.driving.userData.rec.x=P.driving.position.x;P.driving.userData.rec.z=P.driving.position.z;P.driving=null;P.rv=0}$("fade").style.opacity=1;
   setTimeout(()=>{let best={x:CAPS.x,z:CAPS.z},bd=1e9;zones().forEach(z=>{if(!z.w)return;const d=Math.hypot(z.x-P.x,z.z-P.z);if(d<bd){bd=d;best=z}});
     P.x=best.x+4;P.z=best.z+4;P.y=height(P.x,P.z);P.vy=0;S.o2=100;S.water=100;
     const lost=[];RES.forEach(r=>{const l=Math.floor(S.inv[r.k]*.25);if(l>0){S.inv[r.k]-=l;lost.push(l+" "+r.nom.toLowerCase())}});
@@ -1270,8 +1272,32 @@ addEventListener("beforeunload",save);document.addEventListener("visibilitychang
 setTimeout(()=>{if(!S.placed.length)toast("Tes réserves d'oxygène baissent loin de la capsule. Surveille la jauge en bas à gauche.")},2500);
 let uiAcc=0,fpsT=0,fpsN=0,last=performance.now(),hudAcc=0,colAcc=0,saveAcc=0,colKey="";
 const camOff=new T.Vector3(),headP=new T.Vector3();
+/* ---------- Manette (gamzu.fr/gamzu-pad.js, optionnel) ---------- */
+const PAD=window.GamzuPad||null;
+let padOn=false,padRun=false;
+// stick gauche → même entrée que le joystick tactile ; stick droit → regard ; LT ou clic du stick gauche → courir
+function padStep(dt){
+  const pa=PAD&&PAD.actif?PAD.axes:null;
+  if(!pa){if(padOn){padOn=false;padRun=false;keys.ShiftRight=false;if(joy.id===null)joy.dx=joy.dy=0}return}
+  padOn=true;
+  if(joy.id===null){joy.dx=pa.lx;joy.dy=pa.ly}
+  if(!pa.lx&&!pa.ly)padRun=false;
+  keys.ShiftRight=padRun||pa.lt>.3;
+  if(playing&&!dead){const rx=pa.rx*Math.abs(pa.rx),ry=pa.ry*Math.abs(pa.ry);if(rx||ry)look(rx*1150*dt,ry*850*dt,.0024)}
+}
+if(PAD)PAD.init({
+  touches:{A:'Space',B:'KeyC',X:'KeyF',Y:'KeyR',RT:()=>act(),
+    LB:()=>{if(playing)select(sel-1)},RB:()=>{if(playing)select(sel+1)},
+    GAUCHE:()=>{if(playing)select(sel-1)},DROITE:()=>{if(playing)select(sel+1)},
+    HAUT:'KeyV',RS:'KeyV',BAS:'KeyX',LS:()=>{padRun=!padRun},
+    START:()=>{if(playing)openMenu("Partie en pause.")}},
+  menu:()=>{const m=$("menu");return getComputedStyle(m).display!=="none"?m:null},
+  retour:()=>{if($("play").textContent==="Reprendre")start()},
+  aide:'Stick gauche marcher (clic ou LT : courir) · stick droit regarder · RT récolter / construire<br>A sauter / monter · B descendre · LB / RB objet · X boire · Y rover · croix bas démonter · Start pause'
+});
 function loop(now){
   const dt=Math.min(.1,(now-last)/1000);last=now;
+  padStep(dt);
   stepEco(dt);S.tod=(S.tod+dt/DAY)%1;
   let moving=false;
   if(playing&&!dead&&P.driving){if(P.driving.userData.kind==="vaisseau")fly(dt);else drive(dt);survive(dt)}
