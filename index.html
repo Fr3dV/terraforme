@@ -140,10 +140,10 @@ button:focus-visible,.slot:focus-visible{outline:3px solid var(--pres);outline-o
   <div class="bar"><i id="prog"></i></div>
   <div class="tiline"><span id="next"></span><span id="tiRate"></span></div>
   <div class="params">
-    <div style="--c:var(--heat)"><span>Chaleur</span><output id="p-heat">0</output></div>
-    <div style="--c:var(--pres)"><span>Pression</span><output id="p-pres">0</output></div>
-    <div style="--c:var(--oxy)"><span>Oxygène</span><output id="p-oxy">0</output></div>
-    <div style="--c:var(--bio)"><span>Biomasse</span><output id="p-bio">0</output></div>
+    <div style="--c:var(--heat)"><span id="l-heat">Chaleur</span><output id="p-heat">0</output></div>
+    <div style="--c:var(--pres)"><span id="l-pres">Pression</span><output id="p-pres">0</output></div>
+    <div style="--c:var(--oxy)"><span id="l-oxy">Oxygène</span><output id="p-oxy">0</output></div>
+    <div style="--c:var(--bio)"><span id="l-bio">Biomasse</span><output id="p-bio">0</output></div>
   </div>
 </div>
 <div class="hud panel" id="obj"><span>Objectif</span><div id="objTxt"></div></div>
@@ -193,6 +193,7 @@ button:focus-visible,.slot:focus-visible{outline:3px solid var(--pres);outline-o
       <dt>Épaves</dt><dd>Suis le repère orange de la boussole : chaque coffre contient des ressources et souvent une amélioration.</dd>
       <dt class="kb">Son, qualité</dt><dd class="kb">M coupe le son ; G allège le rendu si ça rame</dd>
       <dt>Météo</dt><dd>Pluie, orages et tempêtes de sable arrivent quand l'atmosphère s'épaissit. Sous la pluie, ta réserve d'eau se remplit.</dd>
+      <dt>Planète</dt><dd>Gravité faible : les sauts sont longs et flottants. Tant que l’air est ténu, les sons du dehors sont étouffés, tu entends surtout ta respiration, et les étoiles restent visibles en plein jour.</dd>
       <dt>Survie</dt><dd>La capsule, les habitats et les générateurs d'O₂ rechargent ton oxygène ; les habitats donnent aussi de l'eau.</dd>
     </dl>
     <div id="gzScores"></div>
@@ -249,6 +250,7 @@ const DEFS=[
 const DEF=Object.fromEntries(DEFS.map(d=>[d.id,d]));
 const TERRA=["heat","pres","oxy","bio"];
 const LABEL={heat:"chaleur",pres:"pression",oxy:"oxygène",bio:"biomasse",fer:"fer",sil:"silicium",gl:"glace",ti:"titane"};
+const PLAB={heat:"Chaleur",pres:"Pression",oxy:"Oxygène",bio:"Biomasse"};
 const GROWTH=1.12,KEY="terraforme-v3",DAY=480;
 
 const fresh=()=>({heat:0,pres:0,oxy:0,bio:0,inv:{fer:14,sil:8,gl:6,ti:0},got:{fer:0,sil:0,gl:0,ti:0},n:Object.fromEntries(DEFS.map(d=>[d.id,0])),
@@ -297,8 +299,20 @@ function zoneW(x,z){const sm=v=>v<0?0:v>1?1:v*v*(3-2*v);
   return {m:sm(1-(Math.hypot(x-140,z+120)-40)/40),v:sm(1-(Math.hypot(x+150,z-90)-45)/45),c:sm(1-(Math.hypot(x-45,z-150)-25)/35)}}
 const clamp=v=>v<0?0:v>1?1:v;
 const F=()=>({h:clamp(Math.sqrt(S.heat/40000)),p:clamp(Math.sqrt(S.pres/40000)),o:clamp(Math.sqrt(S.oxy/40000)),b:clamp(Math.sqrt(S.bio/60000))});
-function waterY(){const f=F();return -40+32*Math.min(f.h,f.p)}
+/* niveau de l'eau : calé sur le point le plus bas du cratère (HMIN, mesuré sur le terrain) pour qu'une mare gelée
+   apparaisse au dégel, qu'elle fonde quand le lac se forme (f=.35) et que le lac monte ensuite jusqu'à -8, son niveau final d'origine */
+let HMIN=-16;
+function waterY(){const f=F(),m=Math.min(f.h,f.p);return m<.35?HMIN-.5+3.5*clamp((m-.1)/.25):HMIN+3+(-11-HMIN)*(m-.35)/.65}
 const lakeOn=()=>{const f=F();return Math.min(f.h,f.p)>.35};
+/* avant le dégel, le fond du cratère est une plaque de glace sur laquelle on marche */
+const iceOn=()=>{const f=F(),m=Math.min(f.h,f.p);return m>.1&&m<=.35};
+const gnd=(x,z)=>{const y=height(x,z);return iceOn()?Math.max(y,waterY()):y};
+/* grandeurs physiques affichées, déduites des quatre compteurs (l'indice et la progression ne changent pas).
+   Le lac se forme à f=.35 : cela correspond à 0 °C de moyenne et environ 130 hPa, où l'eau liquide est stable. */
+const GRAV=12,JUMP=6.4;
+function phys(){const f=F();return {T:f.h<.35?-70+200*f.h:(f.h-.35)/.65*18,P:6+1007*clamp(S.pres/40000),O:20.9*clamp(S.oxy/40000),B:100*f.b}}
+function localT(alt){const f=F(),a=(S.tod-.25)*Math.PI*2;return phys().T+(30-22*f.p)*Math.sin(a-.6)-.12*Math.max(0,alt)}
+const degC=v=>{const r=Math.round(v);return (r<0?"\u2212":"")+Math.abs(r)+"\u00a0°C"};
 
 /* ================= Rendu ================= */
 const canvas=$("view");
@@ -318,15 +332,17 @@ const lamp=new T.SpotLight(0xfff0d0,0,45,.55,.6,1.2);lamp.position.set(0,0,0);ca
 const lampT=new T.Object3D();lampT.position.set(0,-.3,-5);camera.add(lampT);lamp.target=lampT;
 
 // ciel
-const skyU={top:{value:new T.Color()},bot:{value:new T.Color()},sunDir:{value:new T.Vector3(0,1,0)},sunCol:{value:new T.Color(0xfff0d0)},sunA:{value:1}};
+const skyU={top:{value:new T.Color()},bot:{value:new T.Color()},sunDir:{value:new T.Vector3(0,1,0)},sunCol:{value:new T.Color(0xfff0d0)},sunA:{value:1},haze:{value:1}};
 const sky=new T.Mesh(new T.SphereGeometry(900,32,16),new T.ShaderMaterial({uniforms:skyU,side:T.BackSide,depthWrite:false,fog:false,
   vertexShader:"varying vec3 vP;void main(){vP=normalize(position);gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}",
-  fragmentShader:"uniform vec3 top,bot,sunCol,sunDir;uniform float sunA;varying vec3 vP;void main(){float h=vP.y;vec3 c=mix(bot,top,smoothstep(-.02,.55,h));float s=max(dot(vP,normalize(sunDir)),0.);c+=sunCol*(pow(s,900.)*3.+pow(s,40.)*.35+pow(s,6.)*.12)*sunA;gl_FragColor=vec4(c,1.);}"}));
+  fragmentShader:"uniform vec3 top,bot,sunCol,sunDir;uniform float sunA,haze;varying vec3 vP;void main(){float h=vP.y;vec3 c=mix(bot,top,smoothstep(-.02,.55,h));float s=max(dot(vP,normalize(sunDir)),0.);c+=sunCol*(pow(s,900.)*3.+(pow(s,40.)*.35+pow(s,6.)*.12)*haze)*sunA;gl_FragColor=vec4(c,1.);}"}));
 sky.renderOrder=-2;scene.add(sky);
-const starG=new T.BufferGeometry(),sp=[];
-for(let i=0;i<1400;i++){const th=Math.random()*Math.PI*2,ph=Math.acos(Math.random()*.97),r=850;sp.push(r*Math.sin(ph)*Math.cos(th),r*Math.cos(ph),r*Math.sin(ph)*Math.sin(th))}
-starG.setAttribute("position",new T.Float32BufferAttribute(sp,3));
-const starM=new T.PointsMaterial({color:0xffffff,size:1.7,sizeAttenuation:false,transparent:true,fog:false,depthWrite:false});
+const starG=new T.BufferGeometry(),sp=[],stc=[];
+/* sphère complète (le ciel tourne avec l'heure), éclat et teinte variables */
+for(let i=0;i<2600;i++){const th=Math.random()*Math.PI*2,cz=Math.random()*2-1,sr=Math.sqrt(1-cz*cz),r=850;sp.push(r*sr*Math.cos(th),r*cz,r*sr*Math.sin(th));
+  const b=.3+.7*Math.pow(Math.random(),2.2),w=Math.random();if(w<.15)stc.push(b*.78,b*.88,b);else if(w>.86)stc.push(b,b*.84,b*.66);else stc.push(b,b,b)}
+starG.setAttribute("position",new T.Float32BufferAttribute(sp,3));starG.setAttribute("color",new T.Float32BufferAttribute(stc,3));
+const starM=new T.PointsMaterial({color:0xffffff,size:1.8,sizeAttenuation:false,transparent:true,fog:false,depthWrite:false,vertexColors:true});
 const stars=new T.Points(starG,starM);stars.renderOrder=-1;scene.add(stars);
 // lune
 const moon=new T.Mesh(new T.SphereGeometry(30,24,16),new T.MeshBasicMaterial({color:0xcfc6e8,fog:false,transparent:true}));scene.add(moon);
@@ -334,6 +350,7 @@ const moon=new T.Mesh(new T.SphereGeometry(30,24,16),new T.MeshBasicMaterial({co
 // terrain
 const tg=new T.PlaneGeometry(SIZE,SIZE,SEG,SEG);tg.rotateX(-Math.PI/2);
 const tp=tg.attributes.position;for(let i=0;i<tp.count;i++)tp.setY(i,height(tp.getX(i),tp.getZ(i)));
+{let m=1e9;for(let i=0;i<tp.count;i++)m=Math.min(m,tp.getY(i));HMIN=m}
 tg.computeVertexNormals();
 const cols=new Float32Array(tp.count*3);tg.setAttribute("color",new T.BufferAttribute(cols,3));
 function vnp(x,y,p){const xi=Math.floor(x),yi=Math.floor(y),xf=x-xi,yf=y-yi,u=xf*xf*(3-2*xf),v=yf*yf*(3-2*yf),m=a=>((a%p)+p)%p;
@@ -606,7 +623,7 @@ const legL=limb(.2,.78,-.14,.78),legR=limb(.2,.78,.14,.78),armL=limb(.15,.66,-.4
 hero.traverse(o=>{if(o.isMesh)o.castShadow=true});scene.add(hero);
 
 /* ================= Joueur et contrôles ================= */
-const P={x:CAPS.x+6,z:CAPS.z+8,y:0,vy:0,yaw:.6,pitch:-.05,ground:true,walk:0};
+const P={x:CAPS.x+6,z:CAPS.z+8,y:0,vy:0,vx:0,vz:0,yaw:.6,pitch:-.05,ground:true,walk:0,bob:0,land:0,exert:0};
 if(S.pos){P.x=S.pos[0];P.z=S.pos[1];P.yaw=S.pos[2]||0}
 P.y=height(P.x,P.z);
 const keys={};
@@ -686,7 +703,7 @@ function updateAim(){
   else{const d=SLOTS[sel],c=costOf(d);
     if(ti()<d.unlock)label=d.nom+" : débloqué à "+fmt(d.unlock)+" d'indice";
     else if(!aim.point)label="Vise le sol, plus près";
-    else if(aim.point.y<waterY()-.2)label="Impossible de construire sous l'eau";
+    else if(aim.point.y<waterY()-.2)label=iceOn()?"Impossible de construire sous la glace":"Impossible de construire sous l'eau";
     else if(machines.some(m=>m.position.distanceTo(aim.point)<3.2)||aim.point.distanceTo(capsule.position)<4)label="Trop près d'une autre construction";
     else if(!canPay(c))label="Ressources insuffisantes";
     else{aim.ok=true;label="Clic pour construire"}}
@@ -772,7 +789,9 @@ function updateHUD(){
   const nx=STAGES[si+1];
   if(nx){const a=STAGES[si][0];$("prog").style.width=(100*(t-a)/(nx[0]-a))+"%";$("next").textContent="Suivant : "+fmt(nx[0])}
   else{$("prog").style.width="100%";$("next").textContent="Terraformation achevée"}
-  TERRA.forEach(k=>$("p-"+k).textContent=fmt(S[k]));
+  {const ph=phys(),pc=v=>v.toLocaleString("fr-FR",{maximumFractionDigits:1})+"\u00a0%";
+    TERRA.forEach(k=>$("l-"+k).textContent=PLAB[k]+" · "+fmt(S[k]));
+    $("p-heat").textContent=degC(ph.T);$("p-pres").textContent=fmt(ph.P)+"\u00a0hPa";$("p-oxy").textContent=pc(ph.O);$("p-bio").textContent=Math.round(ph.B)+"\u00a0% du sol"}
   RES.forEach(r=>{$("i-"+r.k).textContent=fmt(Math.floor(S.inv[r.k]));$("ir-"+r.k).textContent=R.r[r.k]?"+"+fmt(R.r[r.k])+"/s":""});
   $("en").textContent=fmt(R.sup)+" / "+fmt(R.dem);const low=R.eff<1;$("enBox").classList.toggle("low",low);
   $("enNote").textContent=low?"Déficit : machines à "+Math.round(R.eff*100)+" %":"production / besoin";
@@ -783,7 +802,7 @@ function updateHUD(){
   if(sel===0)$("sel").innerHTML="<b>Main</b> : vise une roche colorée et clique pour la ramasser";
   else if(t<s.unlock)$("sel").innerHTML="<b>"+s.nom+"</b> : débloqué à "+fmt(s.unlock)+" d'indice";
   else{const c=costOf(s);$("sel").innerHTML="<b>"+s.nom+"</b> : "+Object.keys(c).map(k=>'<span class="'+(S.inv[k]<c[k]?"miss":"")+'">'+RN[k]+" "+c[k]+"</span>").join(", ")+". "+effText(s)}
-  const h=Math.floor(S.tod*24),mn=Math.floor((S.tod*24-h)*60);$("ups").textContent=UPG.filter(u=>S.up[u.k]).map(u=>u.nom).join(", ");$("clock").textContent="Heure locale "+String(h).padStart(2,"0")+" h "+String(mn).padStart(2,"0");
+  const h=Math.floor(S.tod*24),mn=Math.floor((S.tod*24-h)*60);$("ups").textContent=UPG.filter(u=>S.up[u.k]).map(u=>u.nom).join(", ");$("clock").textContent="Heure locale "+String(h).padStart(2,"0")+" h "+String(mn).padStart(2,"0")+" · "+degC(localT(P.y))+" dehors";
   checkObj();layoutLeft();
 }
 function updSurv(){
@@ -814,7 +833,7 @@ function survive(dt){
 }
 function faint(why){dead=true;if(PAD)PAD.vibrer(600,1);if(P.driving){P.driving.userData.rec.x=P.driving.position.x;P.driving.userData.rec.z=P.driving.position.z;P.driving=null;P.rv=0}$("fade").style.opacity=1;
   setTimeout(()=>{let best={x:CAPS.x,z:CAPS.z},bd=1e9;zones().forEach(z=>{if(!z.w)return;const d=Math.hypot(z.x-P.x,z.z-P.z);if(d<bd){bd=d;best=z}});
-    P.x=best.x+4;P.z=best.z+4;P.y=height(P.x,P.z);P.vy=0;S.o2=100;S.water=100;
+    P.x=best.x+4;P.z=best.z+4;P.y=height(P.x,P.z);P.vy=P.vx=P.vz=0;S.o2=100;S.water=100;
     const lost=[];RES.forEach(r=>{const l=Math.floor(S.inv[r.k]*.25);if(l>0){S.inv[r.k]-=l;lost.push(l+" "+r.nom.toLowerCase())}});
     toast(why+" Réveil au refuge"+(lost.length?", perte de "+lost.join(", "):"")+".","bad");$("fade").style.opacity=0;dead=false;save()},1200)}
 
@@ -836,8 +855,10 @@ function recolor(){
     if(y>snow+(n-.5)*8&&slope<.55&&wV[i]<.4)tmp.copy(cSnow);
     cols[i*3]=tmp.r;cols[i*3+1]=tmp.g;cols[i*3+2]=tmp.b}
   tg.attributes.color.needsUpdate=true;
-  water.position.y=wy;water.material.opacity=clamp(Math.min(f.h,f.p)*3)*.8;
-  water.material.color.setHex(0x2a6fb0).lerp(C(0x1f8aa0),f.b*.6);
+  {const m=Math.min(f.h,f.p),liq=clamp((m-.31)/.04),wm=water.material;
+    water.position.y=wy;wm.opacity=clamp((m-.1)*20)*.9*(1-liq)+.8*liq;
+    tmp2.setHex(0x2a6fb0).lerp(C(0x1f8aa0),f.b*.6);wm.color.setHex(0xcfe2ee).lerp(tmp2,liq);
+    wm.shininess=35+85*liq;wm.normalScale.setScalar(.1+.35*liq)}
   // arbres
   const want=Math.floor(f.b*820);let tries=0;
   while(treeCount()<want&&tries<700){tries++;const x=(Math.random()*2-1)*(HALF-50),z=(Math.random()*2-1)*(HALF-50),y=height(x,z);const zw=zoneW(x,z);
@@ -874,14 +895,18 @@ function ambiance(){
   botD.lerp(C(0xf0936a),sunset*.55);
   const top=C(0x04050d).lerp(topD,day),bot=C(0x0b0d1a).lerp(botD,day);
   skyU.top.value.copy(top);skyU.bot.value.copy(bot);skyU.sunDir.value.copy(sd);skyU.sunA.value=clamp(el*5+.5);
-  scene.fog.color.copy(bot);scene.fog.near=25+60*f.p;scene.fog.far=(240+280*f.o)*(.55+.45*day);
+  skyU.haze.value=.1+.9*clamp(f.p*1.5);stars.rotation.z=a;
+  /* sans air, pas de brume : horizon net. La brume s'installe avec la pression, puis l'air s'éclaircit avec l'oxygène. */
+  scene.fog.color.copy(bot);scene.fog.near=25+60*f.p+200*(1-clamp(f.p*4));scene.fog.far=(520-280*clamp(f.p*1.4)*(1-f.o))*(.55+.45*day);
   starM.opacity=clamp((1-day)*1+(1-f.p*1.3)*day*.9);
-  sun.intensity=1.15*day;sun.color.setHex(0xfff1dc).lerp(C(0xffa070),sunset);
-  hemi.intensity=.18+.42*day;hemi.color.copy(C(0x8a90b8)).lerp(C(0xcfe4ff),f.o*day);
+  sun.intensity=(1.32-.17*f.p)*day;sun.color.setHex(0xfff1dc).lerp(C(0xffa070),sunset);
+  hemi.intensity=.18+(.27+.15*f.p)*day;hemi.color.copy(C(0x8a90b8)).lerp(C(0xcfe4ff),f.o*day);
   sun.position.set(P.x+sd.x*200,P.y+Math.max(.05,sd.y)*200,P.z+sd.z*200);sun.target.position.set(P.x,P.y,P.z);
   const md=sd.clone().negate();moon.position.set(camera.position.x+md.x*800,camera.position.y+md.y*800,camera.position.z+md.z*800);moon.material.opacity=clamp(md.y*4);
   cloudMat.opacity=f.p*.85;cloudMat.color.setHex(0xffffff).lerp(C(0x2a2c44),1-day).lerp(C(0xffb08a),sunset*.5);
   if(AU.windG){AU.windG.gain.setTargetAtTime(playing&&AU.on?(.03+.14*f.p)*(.6+.4*day):0,AU.ctx.currentTime,.5);AU.windF.frequency.setTargetAtTime(260+380*f.p,AU.ctx.currentTime,.5)}
+  /* le son porte mal dans un air ténu : étouffé au début, plein quand la pression monte (et feutré dans un véhicule) */
+  if(AU.lp){AU.lp.frequency.setTargetAtTime(Math.min(P.driving?900:20000,350*Math.pow(50,f.p)),AU.ctx.currentTime,.4);AU.world.gain.setTargetAtTime(.45+.55*f.p,AU.ctx.currentTime,.4)}
   lamp.intensity=day<.35?(1-day/.35)*1.6:0;
   machines.forEach(m=>{const g=m.userData.glow;if(g&&!m.userData.anim)g.material.emissiveIntensity=1+2*(1-day)});
   capsule.userData.glow.material.emissiveIntensity=1+2*(1-day);
@@ -926,19 +951,34 @@ function openChest(w){if(S.chests.includes(w.id))return;S.chests.push(w.id);w.li
 const AU={ctx:null,on:S.sound!==false};
 function auInit(){if(AU.ctx)return;const AC=window.AudioContext||window.webkitAudioContext;if(!AC)return;
   try{const c=new AC();AU.ctx=c;AU.master=c.createGain();AU.master.gain.value=AU.on?.8:0;AU.master.connect(c.destination);
+    AU.world=c.createGain();AU.lp=c.createBiquadFilter();AU.lp.type="lowpass";AU.lp.frequency.value=400;AU.world.connect(AU.lp);AU.lp.connect(AU.master);
     const len=c.sampleRate*2,buf=c.createBuffer(1,len,c.sampleRate),d=buf.getChannelData(0);for(let i=0;i<len;i++)d[i]=Math.random()*2-1;AU.noise=buf;
     const src=c.createBufferSource();src.buffer=buf;src.loop=true;const bp=c.createBiquadFilter();bp.type="bandpass";bp.frequency.value=380;bp.Q.value=.5;
-    AU.windG=c.createGain();AU.windG.gain.value=0;src.connect(bp);bp.connect(AU.windG);AU.windG.connect(AU.master);src.start();AU.windF=bp;
+    AU.windG=c.createGain();AU.windG.gain.value=0;src.connect(bp);bp.connect(AU.windG);AU.windG.connect(AU.world);src.start();AU.windF=bp;
+    const bs=c.createBufferSource();bs.buffer=buf;bs.loop=true;AU.brF=c.createBiquadFilter();AU.brF.type="bandpass";AU.brF.frequency.value=800;AU.brF.Q.value=1.1;
+    AU.brG=c.createGain();AU.brG.gain.value=0;bs.connect(AU.brF);AU.brF.connect(AU.brG);AU.brG.connect(AU.master);bs.start(0,.7);
     const eo=c.createOscillator();eo.type="sawtooth";eo.frequency.value=45;const ef=c.createBiquadFilter();ef.type="lowpass";ef.frequency.value=320;AU.engG=c.createGain();AU.engG.gain.value=0;eo.connect(ef);ef.connect(AU.engG);AU.engG.connect(AU.master);eo.start();AU.engO=eo}catch(e){AU.ctx=null}}
-function noiseHit(f,g,dur,type){const c=AU.ctx,s=c.createBufferSource();s.buffer=AU.noise;const fl=c.createBiquadFilter();fl.type=type||"lowpass";fl.frequency.value=f;
-  const gn=c.createGain(),t=c.currentTime;gn.gain.setValueAtTime(g,t);gn.gain.exponentialRampToValueAtTime(.001,t+dur);s.connect(fl);fl.connect(gn);gn.connect(AU.master);s.start(t,Math.random()*1.5);s.stop(t+dur+.05)}
-function tone(f1,f2,g,dur,type){const c=AU.ctx,o=c.createOscillator();o.type=type||"sine";const gn=c.createGain(),t=c.currentTime;
+/* dest : AU.master pour les sons de la combinaison (entendus tels quels), sinon le monde extérieur, filtré selon la pression */
+function noiseHit(f,g,dur,type,dest){const c=AU.ctx,s=c.createBufferSource();s.buffer=AU.noise;const fl=c.createBiquadFilter();fl.type=type||"lowpass";fl.frequency.value=f;
+  const gn=c.createGain(),t=c.currentTime;gn.gain.setValueAtTime(g,t);gn.gain.exponentialRampToValueAtTime(.001,t+dur);s.connect(fl);fl.connect(gn);gn.connect(dest||AU.world);s.start(t,Math.random()*1.5);s.stop(t+dur+.05)}
+function tone(f1,f2,g,dur,type,dest){const c=AU.ctx,o=c.createOscillator();o.type=type||"sine";const gn=c.createGain(),t=c.currentTime;
   o.frequency.setValueAtTime(f1,t);o.frequency.exponentialRampToValueAtTime(f2,t+dur);gn.gain.setValueAtTime(g,t);gn.gain.exponentialRampToValueAtTime(.001,t+dur);
-  o.connect(gn);gn.connect(AU.master);o.start(t);o.stop(t+dur+.05)}
+  o.connect(gn);gn.connect(dest||AU.world);o.start(t);o.stop(t+dur+.05)}
 const SFX={boom:()=>{tone(90,28,.6,1.1);noiseHit(320,.6,1.3)},whoosh:()=>noiseHit(900,.12,.9,"bandpass"),step:()=>noiseHit(600,.1,.08),mine:()=>{noiseHit(2400,.3,.16,"bandpass");tone(420,140,.14,.2,"triangle")},
-  pick:()=>{tone(660,660,.08,.12);setTimeout(()=>AU.ctx&&tone(990,990,.07,.18),90)},build:()=>{tone(120,45,.35,.4);noiseHit(380,.22,.3)},
-  alarm:()=>tone(880,860,.07,.14,"square"),jet:()=>noiseHit(1400,.06,.14,"highpass"),
-  chest:()=>{[392,523,784].forEach((f,i)=>setTimeout(()=>AU.ctx&&tone(f,f,.12,.3),i*120))}};
+  pick:()=>{tone(660,660,.08,.12,0,AU.master);setTimeout(()=>AU.ctx&&tone(990,990,.07,.18,0,AU.master),90)},build:()=>{tone(120,45,.35,.4);noiseHit(380,.22,.3)},
+  alarm:()=>tone(880,860,.07,.14,"square",AU.master),jet:()=>noiseHit(1400,.06,.14,"highpass",AU.master),
+  land:()=>{noiseHit(260,.2,.16);tone(70,40,.12,.14)},
+  chest:()=>{[392,523,784].forEach((f,i)=>setTimeout(()=>AU.ctx&&tone(f,f,.12,.3,0,AU.master),i*120))}};
+/* respiration dans le casque : plus rapide à l'effort ou quand l'oxygène manque, disparaît quand l'air est respirable */
+let brPh=0;
+function breathe(dt){if(!AU.brG)return;const si=stageIdx(),need=si>=6?0:si===5?.6:1,low=S.o2<25?1:0;
+  if(P.driving)P.exert*=Math.max(0,1-dt*.3);
+  brPh=(brPh+dt*(.22+.34*P.exert+.2*low))%1;const inh=brPh<.42,e=inh?Math.sin(brPh/.42*Math.PI):brPh<.92?Math.sin((brPh-.42)/.5*Math.PI)*.7:0;
+  AU.brG.gain.setTargetAtTime(playing&&AU.on&&!dead?need*(.02+.04*P.exert+.025*low)*e:0,AU.ctx.currentTime,.05);AU.brF.frequency.setTargetAtTime(inh?1150:620,AU.ctx.currentTime,.09)}
+/* poussière soulevée (pas, réception de saut, roues) : rien sous la pluie, dans l'eau ou sur la glace, moins sur un sol végétalisé */
+const VD=new T.Vector3();
+function footDust(x,y,z,n,size){if(W.k>.5&&(W.type==="pluie"||W.type==="orage"))return;if((lakeOn()||iceOn())&&y<waterY()+.3)return;const op=.34*(1-.7*F().b);
+  for(let i=0;i<n;i++)puff(V3.set(x+(Math.random()-.5)*.6,y+.12,z+(Math.random()-.5)*.6),0x9a8778,size||.32,VD.set((Math.random()-.5)*1.2,.3+Math.random()*.45,(Math.random()-.5)*1.2),1.5,2.6,op)}
 function sfx(n){if(AU.ctx&&AU.on)try{SFX[n]()}catch(e){}}
 function toggleSound(){AU.on=!AU.on;S.sound=AU.on;if(AU.master)AU.master.gain.value=AU.on?.8:0;toast(AU.on?"Son activé":"Son coupé")}
 let stepSign=1,jetT=0,DAYV=1;
@@ -981,7 +1021,7 @@ function fly(dt){const sh=P.driving;let th=0,st=0;
   const gy=height(sh.position.x,sh.position.z),alt=sh.position.y-gy;if(!th&&!up&&alt>.1)P.sv.y-=3*dt;
   P.sv.multiplyScalar(Math.pow(.985,dt*60));const mx=48*boost;if(P.sv.length()>mx)P.sv.setLength(mx);
   sh.position.addScaledVector(P.sv,dt);const lim=HALF-30;sh.position.x=Math.max(-lim,Math.min(lim,sh.position.x));sh.position.z=Math.max(-lim,Math.min(lim,sh.position.z));
-  const g2=Math.max(height(sh.position.x,sh.position.z),lakeOn()?waterY():-99);if(sh.position.y<g2){sh.position.y=g2;if(P.sv.y<0)P.sv.y=0;P.sv.multiplyScalar(.9)}if(sh.position.y>g2+220)sh.position.y=g2+220;
+  const g2=Math.max(height(sh.position.x,sh.position.z),lakeOn()||iceOn()?waterY():-99);if(sh.position.y<g2){sh.position.y=g2;if(P.sv.y<0)P.sv.y=0;P.sv.multiplyScalar(.9)}if(sh.position.y>g2+220)sh.position.y=g2+220;
   const bank=-st*.45*Math.min(1,P.sv.length()/15);sh.rotation.order="YXZ";sh.rotation.y=P.sYaw;sh.rotation.x+=((alt>1.5?P.pitch*.7:0)-sh.rotation.x)*Math.min(1,dt*3);sh.rotation.z+=(bank-sh.rotation.z)*Math.min(1,dt*3);
   P.x=sh.position.x;P.z=sh.position.z;P.y=sh.position.y;P.yaw=P.sYaw;
   const pw=Math.min(1,Math.abs(th)+Math.abs(up)*.6);const u=sh.userData;[u.engL,u.engR].forEach(e=>{if(e)e.material.emissiveIntensity=.6+2.5*pw*boost})
@@ -995,8 +1035,10 @@ function drive(dt){const rv=P.driving;let th=0,st=0;
   rv.rotation.y+=st*dt*1.7*Math.min(1,Math.abs(P.rv)/4)*(P.rv<0?-1:1);
   const fx=-Math.sin(rv.rotation.y),fz=-Math.cos(rv.rotation.y),nx=rv.position.x+fx*P.rv*dt,nz=rv.position.z+fz*P.rv*dt,lim=HALF-35;
   const ny=height(nx,nz);
+  if(Math.abs(P.rv)>4){P.rdAcc=(P.rdAcc||0)+dt*Math.min(12,Math.abs(P.rv)*.6);const sg=P.rv<0?-1:1;
+    while(P.rdAcc>1){P.rdAcc-=1;const sd=Math.random()<.5?-1.3:1.3;footDust(rv.position.x-fx*1.5*sg-fz*sd,rv.position.y,rv.position.z-fz*1.5*sg+fx*sd,1,.7)}}
   if(Math.abs(nx)<lim&&Math.abs(nz)<lim&&!(lakeOn()&&ny<waterY()-.4)){rv.position.x=nx;rv.position.z=nz}else P.rv*=-.3;
-  const hf=height(rv.position.x+fx*1.6,rv.position.z+fz*1.6),hb=height(rv.position.x-fx*1.6,rv.position.z-fz*1.6);
+  const hf=gnd(rv.position.x+fx*1.6,rv.position.z+fz*1.6),hb=gnd(rv.position.x-fx*1.6,rv.position.z-fz*1.6);
   rv.position.y=(hf+hb)/2;rv.rotation.x=Math.atan2(hf-hb,3.2);rv.rotation.order="YXZ";
   (rv.userData.wheels||[]).forEach(w=>w.rotation.x+=P.rv*dt/.55);
   P.x=rv.position.x;P.z=rv.position.z;P.y=rv.position.y;P.yaw=rv.rotation.y;
@@ -1260,7 +1302,7 @@ function updWeather(dt){
   if(W.rainbow>0)W.rainbow-=dt;const sd=skyU.sunDir.value,rbA=clamp(Math.min(W.rainbow,8)/8)*clamp(DAYV*2-.4)*clamp(sd.y*3);
   rbow.visible=rbA>.01;if(rbow.visible){rbow.position.set(camera.position.x-sd.x*520,camera.position.y-40,camera.position.z-sd.z*520);rbow.lookAt(camera.position.x,camera.position.y-40,camera.position.z);rbow.children.forEach(m=>m.material.opacity=.42*rbA)}
   // son de pluie
-  if(AU.ctx&&!AU.rainG){try{const c=AU.ctx,src=c.createBufferSource();src.buffer=AU.noise;src.loop=true;const hp=c.createBiquadFilter();hp.type="highpass";hp.frequency.value=1400;AU.rainG=c.createGain();AU.rainG.gain.value=0;src.connect(hp);hp.connect(AU.rainG);AU.rainG.connect(AU.master);src.start()}catch(e){}}
+  if(AU.ctx&&!AU.rainG){try{const c=AU.ctx,src=c.createBufferSource();src.buffer=AU.noise;src.loop=true;const hp=c.createBiquadFilter();hp.type="highpass";hp.frequency.value=1400;AU.rainG=c.createGain();AU.rainG.gain.value=0;src.connect(hp);hp.connect(AU.rainG);AU.rainG.connect(AU.world);src.start()}catch(e){}}
   if(AU.rainG)AU.rainG.gain.setTargetAtTime(AU.on&&wet?k*(W.type==="orage"?.28:.18):0,AU.ctx.currentTime,.4);
   if(AU.windG&&sand)AU.windG.gain.setTargetAtTime(AU.on?.25*k:0,AU.ctx.currentTime,.4)}
 rocks.forEach(placeRock);recolor();S.ultra=false;applyQ();
@@ -1299,8 +1341,8 @@ function loop(now){
   const dt=Math.min(.1,(now-last)/1000);last=now;
   padStep(dt);
   stepEco(dt);S.tod=(S.tod+dt/DAY)%1;
-  let moving=false;
-  if(playing&&!dead&&P.driving){if(P.driving.userData.kind==="vaisseau")fly(dt);else drive(dt);survive(dt)}
+  let moving=false,hs=0;P.land*=Math.max(0,1-dt*7);
+  if(playing&&!dead&&P.driving){P.vx=P.vz=0;if(P.driving.userData.kind==="vaisseau")fly(dt);else drive(dt);survive(dt)}
   else if(playing&&!dead){
     let mx=0,mz=0;
     if(keys.KeyW||keys.ArrowUp)mz+=1;if(keys.KeyS||keys.ArrowDown)mz-=1;
@@ -1309,17 +1351,23 @@ function loop(now){
     const inW=lakeOn()&&P.y<waterY()-.6,run=keys.ShiftLeft||keys.ShiftRight;
     const sp=(run?15:7.5)*(inW?.5:1)*(S.up.bottes?1.3:1);
     const sy=Math.sin(P.yaw),cy=Math.cos(P.yaw);
-    P.x+=(-sy*mz+cy*mx)*sp*dt;P.z+=(-cy*mz-sy*mx)*sp*dt;moving=len>.1;
+    /* inertie : on accélère et on freine vite au sol, peu de contrôle en l'air (gravité faible), ça glisse sur la glace */
+    const onIce=P.ground&&iceOn()&&P.y<=waterY()+.05,ak=Math.min(1,dt*(inW?5:!P.ground?2.5:onIce?1.6:len>.1?11:14));
+    P.vx+=((-sy*mz+cy*mx)*sp-P.vx)*ak;P.vz+=((-cy*mz-sy*mx)*sp-P.vz)*ak;
+    P.x+=P.vx*dt;P.z+=P.vz*dt;hs=Math.hypot(P.vx,P.vz);moving=hs>.8;
+    P.exert+=((moving?(run?1:.3):0)-P.exert)*Math.min(1,dt*.35);
     const lim=HALF-35;P.x=Math.max(-lim,Math.min(lim,P.x));P.z=Math.max(-lim,Math.min(lim,P.z));
-    const gy=height(P.x,P.z);
-    if(keys.Space&&(P.ground||inW)){P.vy=inW?4:8.5;P.ground=false}
-    P.vy-=(inW?6:24)*dt;
-    if(S.up.jetpack&&keys.Space&&!P.ground&&!inW&&P.y<gy+45){P.vy=Math.min(P.vy+42*dt,6.5);jetT+=dt;if(jetT>.12){jetT=0;sfx("jet");burst(new T.Vector3(P.x,P.y+.8,P.z),0xffb347,3)}}
+    const gy=gnd(P.x,P.z);
+    if(keys.Space&&(P.ground||inW)){P.vy=inW?4:JUMP;P.ground=false;if(!inW)P.exert=Math.min(1,P.exert+.1)}
+    P.vy-=(inW?6:GRAV)*dt;
+    if(S.up.jetpack&&keys.Space&&!P.ground&&!inW&&P.y<gy+45){P.vy=Math.min(P.vy+(GRAV+18)*dt,6.5);jetT+=dt;if(jetT>.12){jetT=0;sfx("jet");burst(new T.Vector3(P.x,P.y+.8,P.z),0xffb347,3)}}
     P.y+=P.vy*dt;
     if(inW&&!keys.Space)P.y=Math.min(P.y,waterY()-.5);
-    if(P.y<=gy){P.y=gy;P.vy=0;P.ground=true}
+    /* on reste collé au sol dans les descentes ; au-delà d'une marche, on décolle */
+    if(P.y<=gy||(P.ground&&!inW&&P.vy<=0&&P.y-gy<.5)){if(P.vy<-5&&!inW){sfx("land");footDust(P.x,gy,P.z,5,.4);P.land=Math.min(.3,-P.vy*.03)}P.y=gy;P.vy=0;P.ground=true}
+    else if(!inW&&P.y-gy>=.5)P.ground=false;
     survive(dt);
-    if(moving&&P.ground){P.walk+=dt*(run?13:9);const sg=Math.sin(P.walk)>0?1:-1;if(sg!==stepSign){stepSign=sg;sfx("step")}}
+    if(moving&&P.ground){P.walk+=dt*(3+hs*.6);const sg=Math.sin(P.walk)>0?1:-1;if(sg!==stepSign){stepSign=sg;sfx("step");footDust(P.x,P.y,P.z,run?2:1)}}
   }
   // personnage
   hero.position.set(P.x,P.y,P.z);hero.rotation.y=P.yaw;hero.visible=S.third&&!P.driving;
@@ -1334,7 +1382,9 @@ function loop(now){
     camera.rotation.set(P.pitch-.25,rv.rotation.y+P.lookOff,0)}
   else if(S.third){camOff.set(.9,.2,5).applyEuler(new T.Euler(P.pitch-.18,P.yaw,0,"YXZ"));
     camera.position.copy(headP).add(camOff);const gy=height(camera.position.x,camera.position.z)+.6;if(camera.position.y<gy)camera.position.y=gy}
-  else camera.position.copy(headP).add(new T.Vector3(0,moving&&P.ground?Math.abs(Math.sin(P.walk))*.06:0,0));
+  else{/* balancement de tête proportionnel à la vitesse, tassement à la réception d'un saut */
+    P.bob+=((moving&&P.ground?Math.min(1,hs/9):0)-P.bob)*Math.min(1,dt*8);const bs=Math.sin(P.walk)*.03*P.bob;
+    camera.position.set(headP.x+Math.cos(P.yaw)*bs,headP.y+Math.abs(Math.sin(P.walk))*.07*P.bob-P.land,headP.z-Math.sin(P.yaw)*bs)}
   if(!P.driving)camera.rotation.set(P.pitch,P.yaw,0);
   sky.position.copy(camera.position);stars.position.copy(camera.position);skyDeco.position.copy(camera.position);farRing.position.set(camera.position.x,0,camera.position.z);
   // animations
@@ -1354,7 +1404,7 @@ function loop(now){
   clouds.children.forEach(c=>{c.position.x+=dt*2.5;if(c.position.x>SIZE*.75)c.position.x=-SIZE*.75});
   for(let i=parts.length-1;i>=0;i--){const p=parts[i];p.userData.l-=dt;p.userData.v.y-=12*dt;p.position.addScaledVector(p.userData.v,dt);p.rotation.x+=dt*8;
     if(p.userData.l<=0){scene.remove(p);p.material.dispose();parts.splice(i,1)}}
-  ambiance();updWeather(dt);
+  ambiance();updWeather(dt);breathe(dt);
   hudAcc+=dt;colAcc+=dt;saveAcc+=dt;
   if(hudAcc>.2){updateHUD();hudAcc=0}
   uiAcc+=dt;if(uiAcc>.1){uiAcc=0;updSurv();updCompass()}
